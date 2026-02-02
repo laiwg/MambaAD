@@ -368,8 +368,11 @@ class LSSModule(nn.Module):
 			nn.SiLU(),
 		)
 		self.conv77 = nn.Sequential(
-			nn.Conv2d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=7, stride=1, padding=3, bias=False,
-					  groups=hidden_dim),
+			#nn.Conv2d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=7, stride=1, padding=3, bias=False,
+			#		  groups=hidden_dim),
+
+			nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=2, dilation=2),
+			nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
 			nn.InstanceNorm2d(hidden_dim),
 			nn.SiLU(),
 		)
