@@ -49,7 +49,7 @@ class PatchExpand2D(nn.Module):
         x= self.norm(x)
         return x
 
-class SCANS(nn.Module):
+class HSCANS(nn.Module):
 	def __init__(self, size=16, dim=2, scan_type='scan', ):
 		super().__init__()
 		size = int(size)
@@ -176,7 +176,7 @@ class SS2D(nn.Module):
         self.out_norm = nn.LayerNorm(self.d_inner)
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
         self.dropout = nn.Dropout(dropout) if dropout > 0. else None
-        self.scans = SCANS(size=size, scan_type=scan_type)
+        self.scans = HSCANS(size=size, scan_type=scan_type)
 
     @staticmethod
     def dt_init(dt_rank, d_inner, dt_scale=1.0, dt_init="random", dt_min=0.001, dt_max=0.1, dt_init_floor=1e-4,
@@ -301,7 +301,7 @@ class SS2D(nn.Module):
             out = self.dropout(out)
         return out
 
-class VSSBlock(nn.Module):
+class HSSBlock(nn.Module):
     def __init__(
         self,
         hidden_dim: int = 0,
@@ -323,7 +323,7 @@ class VSSBlock(nn.Module):
         x = input + self.drop_path(self.self_attention(self.ln_1(input)))
         return x
 
-class ConvBNSSMBlock(nn.Module):
+class LSSModule(nn.Module):
 	def __init__(
 			self,
 			hidden_dim: int = 0,
@@ -339,14 +339,14 @@ class ConvBNSSMBlock(nn.Module):
 	):
 		super().__init__()
 		self.smm_blocks = nn.ModuleList([
-			VSSBlock(hidden_dim=hidden_dim, drop_path=drop_path, norm_layer=norm_layer, attn_drop_rate=attn_drop_rate, d_state=d_state, size=size, scan_type=scan_type, num_direction=num_direction,**kwargs)
+			HSSBlock(hidden_dim=hidden_dim, drop_path=drop_path, norm_layer=norm_layer, attn_drop_rate=attn_drop_rate, d_state=d_state, size=size, scan_type=scan_type, num_direction=num_direction,**kwargs)
 			for i in range(depth)])
-		self.conv1b3 = nn.Sequential(
+		self.conv1b7 = nn.Sequential(
 			nn.Conv2d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=1, stride=1),
 			nn.InstanceNorm2d(hidden_dim),
 			nn.SiLU(),
 		)
-		self.conv1a3 = nn.Sequential(
+		self.conv1a7 = nn.Sequential(
 			nn.Conv2d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=1, stride=1),
 			nn.InstanceNorm2d(hidden_dim),
 			nn.SiLU(),
@@ -358,12 +358,6 @@ class ConvBNSSMBlock(nn.Module):
 		)
 		self.conv1a5 = nn.Sequential(
 			nn.Conv2d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=1, stride=1),
-			nn.InstanceNorm2d(hidden_dim),
-			nn.SiLU(),
-		)
-		self.conv33 = nn.Sequential(
-			nn.Conv2d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=3, stride=1, padding=1, bias=False,
-					  groups=hidden_dim),
 			nn.InstanceNorm2d(hidden_dim),
 			nn.SiLU(),
 		)
@@ -401,13 +395,13 @@ class ConvBNSSMBlock(nn.Module):
 		for blk in self.smm_blocks:
 			out_ssm = blk(out_ssm)
 		input_conv = input.permute(0, 3, 1, 2).contiguous()
-		out_77 = self.conv1a3(self.conv77(self.conv1b3(input_conv)))
+		out_77 = self.conv1a7(self.conv77(self.conv1b7(input_conv)))
 		out_55 = self.conv1a5(self.conv55(self.conv1b5(input_conv)))
 		output = torch.cat((out_ssm.permute(0, 3, 1, 2).contiguous(), out_55, out_77), dim=1)
 		output = self.finalconv11(output).permute(0, 2, 3, 1).contiguous()
 		return output + input
 
-class VSSLayer_up(nn.Module):
+class LSSLayer_up(nn.Module):
 	""" A basic Swin Transformer layer for one stage.
     Args:
         dim (int): Number of input channels.
@@ -440,7 +434,7 @@ class VSSLayer_up(nn.Module):
 
 		if depth % 3 == 0:
 			self.blocks = nn.ModuleList([
-				ConvBNSSMBlock(
+				LSSModule(
 					hidden_dim=dim,
 					drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
 					norm_layer=norm_layer,
@@ -454,7 +448,7 @@ class VSSLayer_up(nn.Module):
 				for i in range(depth//3)])
 		elif depth % 2 == 0:
 			self.blocks = nn.ModuleList([
-				ConvBNSSMBlock(
+				LSSModule(
 					hidden_dim=dim,
 					drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
 					norm_layer=norm_layer,
@@ -492,13 +486,13 @@ class VSSLayer_up(nn.Module):
 		return x
 
 class MambaUPNet(nn.Module):
-	def __init__(self, dims_decoder=[512, 256, 128, 64], depths_decoder=[2, 2, 2, 2],d_state=16, drop_rate=0., attn_drop_rate=0., drop_path_rate=0.2,
+	def __init__(self, dims_decoder=[512, 256, 128, 64], depths_decoder=[3, 4, 6, 3],d_state=16, drop_rate=0., attn_drop_rate=0., drop_path_rate=0.2,
 				 norm_layer = nn.LayerNorm,scan_type='scan', num_direction=4, ):
 		super().__init__()
 		dpr_decoder = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths_decoder))][::-1]
 		self.layers_up = nn.ModuleList()
 		for i_layer in range(len(depths_decoder)):
-			layer = VSSLayer_up(
+			layer = LSSLayer_up(
 				dim=dims_decoder[i_layer],
 				depth=depths_decoder[i_layer],
 				d_state=d_state,
@@ -516,10 +510,10 @@ class MambaUPNet(nn.Module):
 
 	def _init_weights(self, m: nn.Module):
 		"""
-        out_proj.weight which is previously initilized in VSSBlock, would be cleared in nn.Linear
+        out_proj.weight which is previously initilized in HSSBlock, would be cleared in nn.Linear
         no fc.weight found in the any of the model parameters
         no nn.Embedding found in the any of the model parameters
-        so the thing is, VSSBlock initialization is useless
+        so the thing is, HSSBlock initialization is useless
 
         Conv2D is not intialized !!!
         """
@@ -548,7 +542,6 @@ class MambaUPNet(nn.Module):
 				out_features.insert(0, rearrange(x,'b h w c -> b c h w'))
 		return out_features
 
-# ========== MFF & OCE ==========
 class MFF_OCE(nn.Module):
 	def __init__(self, block, layers, width_per_group = 64, norm_layer = None, ):
 		super(MFF_OCE, self).__init__()
@@ -641,7 +634,7 @@ def mambaad(pretrained=False, **kwargs):
 if __name__ == '__main__':
     from fvcore.nn import FlopCountAnalysis, flop_count_table, parameter_count
     from util.util import get_timepc, get_net_params
-    vmunet = MambaUPNet([512, 256, 128, 64], [2, 2, 2, 2])
+    vmunet = MambaUPNet([512, 256, 128, 64], [3, 4, 6, 3])
     bs = 1
     reso = 8
     x = torch.randn(bs, 512, reso, reso).cuda()
